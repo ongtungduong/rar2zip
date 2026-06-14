@@ -46,6 +46,8 @@ changelog:
 
 brews:
   - name: rar2zip
+    # Skip publishing to tap when token is not configured.
+    skip_upload: "{{ if eq .Env.HOMEBREW_TAP_TOKEN \"\" }}true{{ end }}"
     repository:
       owner: ongtungduong
       name: homebrew-tap
