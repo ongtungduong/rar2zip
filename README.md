@@ -80,7 +80,9 @@ the rest; the process exits non-zero if any conversion failed. Multi-volume sets
 | `--level <1..9>` | Deflate compression level (1 = fastest, 9 = best). Default: stdlib default. For no compression use `--store`. |
 | `--verify` | Reopen each output ZIP after writing and confirm its entry count and sizes match the source. A ZIP that fails its own check is removed. |
 | `--json` | Emit a machine-readable JSON summary on stdout (suppresses the human progress output). |
-| `--allow-fallback` | When the pure-Go decoder cannot read an archive, fall back to a system `unrar`/`7z` if installed. Waives the no-dependency guarantee. |
+| `--allow-fallback` | When the pure-Go decoder cannot read an archive, fall back to a system `unrar`/`7z` if installed. Waives the no-dependency guarantee. **Unsafe against untrusted archives** (see Security). |
+| `--max-size <n>` | Cap the total uncompressed size an archive may expand to (decompression-bomb defense). Accepts a plain byte count or a `K`/`M`/`G` suffix. `0` (default) = unlimited. Tripping the cap leaves no output and exits non-zero. |
+| `--max-entries <n>` | Cap the number of entries an archive may contain. `0` (default) = unlimited. |
 | `--version` | Print version and exit. |
 | `-h`, `--help` | Print usage and exit. |
 
@@ -97,6 +99,16 @@ Untrusted-archive hardening is in place: entry names are sanitized against
 **path traversal (Zip Slip)** and absolute paths, and symlink/device entries are
 neutralized (stored as plain content) so they cannot escape the extraction root.
 The same neutralization is applied on the `--allow-fallback` path.
+
+**Decompression bombs:** the default pure-Go path streams entries and can be bounded
+with `--max-size`/`--max-entries`; exceeding either cap aborts with no output. Duplicate
+or colliding entry names cannot silently overwrite one another — a name that collides only
+after path sanitization is rejected, and legitimate repeats are kept under a renamed entry.
+
+> **Warning:** `--allow-fallback` is **unsafe against untrusted archives**. The external
+> `unrar`/`7z` extracts the *entire* archive to a temp directory before rar2zip's
+> `--max-size`/`--max-entries` caps apply, so the fallback path is not bomb-bounded. Use it
+> only on archives you trust. (A pre-extraction bound is planned in a later hardening phase.)
 
 > **Note:** `--allow-fallback --password <pw>` passes the password as a command-line
 > argument to `unrar`/`7z`, which may be visible to other local users via the process

@@ -41,6 +41,8 @@ func run(args []string) int {
 		jsonOut       bool
 		allowFallback bool
 		showVersion   bool
+		maxSize       string
+		maxEntries    int
 	)
 
 	fs := flag.NewFlagSet("rar2zip", flag.ContinueOnError)
@@ -58,7 +60,9 @@ func run(args []string) int {
 	fs.IntVar(&level, "level", 0, "Deflate compression level 1..9 (default: stdlib default)")
 	fs.BoolVar(&verify, "verify", false, "reopen each output ZIP and validate it after writing")
 	fs.BoolVar(&jsonOut, "json", false, "emit a machine-readable JSON summary on stdout")
-	fs.BoolVar(&allowFallback, "allow-fallback", false, "use system unrar/7z when the pure-Go decoder fails")
+	fs.BoolVar(&allowFallback, "allow-fallback", false, "use system unrar/7z when the pure-Go decoder fails (unsafe vs untrusted archives)")
+	fs.StringVar(&maxSize, "max-size", "0", "cap total uncompressed size (0 = unlimited; accepts K/M/G suffix)")
+	fs.IntVar(&maxEntries, "max-entries", 0, "cap number of entries per archive (0 = unlimited)")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: rar2zip [flags] <input.rar> [more.rar ...]\n\n"+
@@ -84,16 +88,27 @@ func run(args []string) int {
 		return code
 	}
 
+	maxBytes, err := parseSize(maxSize)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rar2zip: invalid --max-size %q: %v\n", maxSize, err)
+		return 2
+	}
+	if maxEntries < 0 {
+		fmt.Fprintln(os.Stderr, "rar2zip: --max-entries must be >= 0")
+		return 2
+	}
+
+	jobList, err := buildJobs(inputs, output, outDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rar2zip: %v\n", err)
+		return 2
+	}
+
 	if outDir != "" {
 		if err := os.MkdirAll(outDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "rar2zip: %v\n", err)
 			return 1
 		}
-	}
-
-	jobList := make([]convert.Job, len(inputs))
-	for i, src := range inputs {
-		jobList[i] = convert.Job{Src: src, Dst: resolveDst(src, output, outDir)}
 	}
 
 	opts := convert.Options{
@@ -103,6 +118,8 @@ func run(args []string) int {
 		Level:         level,
 		Verify:        verify,
 		AllowFallback: allowFallback,
+		MaxTotalBytes: maxBytes,
+		MaxEntries:    maxEntries,
 	}
 	// --json owns stdout for machine output, so silence the human decoration.
 	human := !quiet && !jsonOut

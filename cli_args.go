@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/ongtungduong/rar2zip/internal/convert"
 )
 
 // validateArgs returns a usage exit code (2) for malformed invocations, or 0.
@@ -41,6 +44,53 @@ func validateArgs(inputs []string, output, outDir string, jobs int, store bool, 
 		}
 	}
 	return 0
+}
+
+// buildJobs resolves each input to its destination ZIP and rejects a batch in
+// which two distinct inputs resolve to the same output. Without this guard a
+// concurrent batch would race to last-writer-wins, silently losing one input's
+// data — the same data-loss class as intra-archive name collisions.
+func buildJobs(inputs []string, output, outDir string) ([]convert.Job, error) {
+	jobs := make([]convert.Job, 0, len(inputs))
+	seen := make(map[string]string, len(inputs)) // dst -> first src that claimed it
+	for _, src := range inputs {
+		dst := resolveDst(src, output, outDir)
+		if prev, dup := seen[dst]; dup {
+			return nil, fmt.Errorf("inputs %q and %q both map to output %q; rename one or convert them separately", prev, src, dst)
+		}
+		seen[dst] = src
+		jobs = append(jobs, convert.Job{Src: src, Dst: dst})
+	}
+	return jobs, nil
+}
+
+// parseSize converts a byte-size string into a count of bytes. It accepts a
+// plain integer or one with a K/M/G (1024-based) suffix; "0" means unlimited.
+func parseSize(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	mult := int64(1)
+	switch s[len(s)-1] {
+	case 'k', 'K':
+		mult = 1 << 10
+	case 'm', 'M':
+		mult = 1 << 20
+	case 'g', 'G':
+		mult = 1 << 30
+	}
+	if mult != 1 {
+		s = s[:len(s)-1]
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("not a byte size (use e.g. 500, 10M, 2G)")
+	}
+	if n < 0 {
+		return 0, fmt.Errorf("must be >= 0")
+	}
+	return n * mult, nil
 }
 
 // resolveDst computes the destination ZIP path for one input. --out-dir places

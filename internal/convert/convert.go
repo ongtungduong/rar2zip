@@ -35,7 +35,24 @@ type Options struct {
 	Verify bool
 	// AllowFallback permits shelling out to a system unrar/7z when the pure-Go
 	// decoder cannot read the archive. This waives the no-dependency guarantee.
+	//
+	// WARNING: the fallback extracts the whole archive to a temp dir with the
+	// external tool BEFORE rar2zip's caps run, so MaxTotalBytes/MaxEntries do
+	// NOT bound it. --allow-fallback is unsafe against untrusted archives until
+	// the fallback gains its own pre-extraction bound.
 	AllowFallback bool
+	// MaxTotalBytes caps the total uncompressed size across all entries on the
+	// native path; 0 (the default) means unlimited. Exceeding it aborts the
+	// conversion with no output (decompression-bomb defense).
+	MaxTotalBytes int64
+	// MaxEntries caps the number of archive entries on the native path; 0 (the
+	// default) means unlimited.
+	MaxEntries int
+}
+
+// limits projects the bomb caps from Options into the emitter's limits.
+func (o Options) limits() limits {
+	return limits{maxBytes: o.MaxTotalBytes, maxEntries: o.MaxEntries}
 }
 
 // DefaultLevel is the Level value (zero) that selects the stdlib default
@@ -125,9 +142,9 @@ func finalizeOutput(tmpName, dstZip string, expected map[string]int64, opts Opti
 // map (files by uncompressed size, directories as 0) that --verify checks the
 // finished archive against.
 func writeZip(out *os.File, rr *rardecode.ReadCloser, opts Options) (map[string]int64, error) {
-	expected := map[string]int64{}
 	zw := zip.NewWriter(out)
 	registerCompressor(zw, opts)
+	em := newZipEmitter(zw, opts.limits(), opts.OnEntry)
 	for {
 		hdr, err := rr.Next()
 		if err == io.EOF {
@@ -144,36 +161,20 @@ func writeZip(out *os.File, rr *rardecode.ReadCloser, opts Options) (map[string]
 			return nil, fmt.Errorf("unsafe rar entry %q: %w", hdr.Name, err)
 		}
 
-		fh := &zip.FileHeader{Name: name, Method: entryMethod(opts)}
+		fh := &zip.FileHeader{Method: entryMethod(opts)}
 		fh.SetMode(safeMode(hdr.Mode(), hdr.IsDir))
 		if !hdr.ModificationTime.IsZero() {
 			fh.Modified = hdr.ModificationTime
 		}
 
 		if hdr.IsDir {
-			// A trailing slash is what records a directory entry in ZIP.
-			fh.Name = strings.TrimRight(name, "/") + "/"
-			if _, err := zw.CreateHeader(fh); err != nil {
-				return nil, fmt.Errorf("write zip dir %q: %w", hdr.Name, err)
-			}
-			expected[fh.Name] = 0
-			if opts.OnEntry != nil {
-				opts.OnEntry(fh.Name)
+			if err := em.emitDir(hdr.Name, strings.TrimRight(name, "/"), fh); err != nil {
+				return nil, err
 			}
 			continue
 		}
-
-		w, err := zw.CreateHeader(fh)
-		if err != nil {
-			return nil, fmt.Errorf("write zip entry %q: %w", hdr.Name, err)
-		}
-		n, err := io.Copy(w, rr)
-		if err != nil {
-			return nil, fmt.Errorf("copy entry %q: %w", hdr.Name, err)
-		}
-		expected[fh.Name] = n
-		if opts.OnEntry != nil {
-			opts.OnEntry(fh.Name)
+		if err := em.emitFile(hdr.Name, name, fh, rr); err != nil {
+			return nil, err
 		}
 	}
 
@@ -185,5 +186,5 @@ func writeZip(out *os.File, rr *rardecode.ReadCloser, opts Options) (map[string]
 	if err := out.Close(); err != nil {
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
-	return expected, nil
+	return em.expected, nil
 }

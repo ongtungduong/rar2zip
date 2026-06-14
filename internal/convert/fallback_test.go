@@ -90,6 +90,87 @@ func TestZipDir(t *testing.T) {
 	}
 }
 
+// TestZipDir_ByteCapLeavesNoOutput proves a tripped size cap aborts with NO
+// output file (the bomb is never silently truncated into a usable ZIP).
+func TestZipDir_ByteCapLeavesNoOutput(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "big.bin"), make([]byte, 1000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "out.zip")
+
+	err := zipDir(src, dst, Options{Store: true, MaxTotalBytes: 100})
+	if err == nil {
+		t.Fatal("expected size-cap error")
+	}
+	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
+		t.Errorf("output should not exist after a tripped cap; stat err = %v", statErr)
+	}
+}
+
+// TestZipDir_EntryCapLeavesNoOutput proves a tripped entry-count cap aborts
+// with no output file.
+func TestZipDir_EntryCapLeavesNoOutput(t *testing.T) {
+	src := t.TempDir()
+	for _, n := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(src, n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dst := filepath.Join(t.TempDir(), "out.zip")
+
+	err := zipDir(src, dst, Options{MaxEntries: 1})
+	if err == nil {
+		t.Fatal("expected entry-cap error")
+	}
+	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
+		t.Errorf("output should not exist after a tripped cap; stat err = %v", statErr)
+	}
+}
+
+// TestZipDir_NeutralizesSymlink proves the emitter refactor preserved symlink
+// neutralization on the fallback path: a symlink is stored as inert content
+// (its target text), never as a link mode that an extractor could follow out
+// of the destination tree.
+func TestZipDir_NeutralizesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	src := t.TempDir()
+	if err := os.Symlink("/etc/passwd", filepath.Join(src, "link")); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "out.zip")
+	if err := zipDir(src, dst, Options{}); err != nil {
+		t.Fatalf("zipDir: %v", err)
+	}
+
+	zr, err := zip.OpenReader(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	var checked bool
+	for _, f := range zr.File {
+		if f.Name != "link" {
+			continue
+		}
+		checked = true
+		if f.Mode()&os.ModeSymlink != 0 {
+			t.Error("symlink entry retained link mode; should be neutralized to a regular file")
+		}
+		rc, _ := f.Open()
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		if string(b) != "/etc/passwd" {
+			t.Errorf("symlink content = %q, want the target text /etc/passwd", b)
+		}
+	}
+	if !checked {
+		t.Error("no 'link' entry found in output")
+	}
+}
+
 func TestConvertViaFallback_Integration(t *testing.T) {
 	dir := t.TempDir()
 	writeFakeTool(t, dir, "unrar", "FROMTOOL")
@@ -129,21 +210,59 @@ func TestExtractArgs(t *testing.T) {
 	tests := []struct {
 		name     string
 		tool     string
+		src      string
 		password string
 		want     []string
 	}{
-		{"unrar no password", "unrar", "", []string{"x", "-o+", "-p-", "a.rar", "out/"}},
-		{"unrar with password", "unrar", "secret", []string{"x", "-o+", "-psecret", "a.rar", "out/"}},
-		{"7z no password", "7z", "", []string{"x", "-y", "a.rar", "-oout"}},
-		{"7z with password", "7z", "secret", []string{"x", "-y", "-psecret", "a.rar", "-oout"}},
+		{"unrar no password", "unrar", "a.rar", "", []string{"x", "-o+", "-p-", "--", "a.rar", "out/"}},
+		{"unrar with password", "unrar", "a.rar", "secret", []string{"x", "-o+", "-psecret", "--", "a.rar", "out/"}},
+		{"7z no password", "7z", "a.rar", "", []string{"x", "-y", "-oout", "--", "a.rar"}},
+		{"7z with password", "7z", "a.rar", "secret", []string{"x", "-y", "-psecret", "-oout", "--", "a.rar"}},
+		// A source starting with '@' is rewritten so it is not read as a list file.
+		{"7z at-prefixed source", "7z", "@list.rar", "", []string{"x", "-y", "-oout", "--", "./@list.rar"}},
+		{"unrar at-prefixed source", "unrar", "@list.rar", "", []string{"x", "-o+", "-p-", "--", "./@list.rar", "out/"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := extractArgs(tc.tool, "a.rar", "out", tc.password)
+			got := extractArgs(tc.tool, tc.src, "out", tc.password)
 			if strings.Join(got, " ") != strings.Join(tc.want, " ") {
 				t.Errorf("extractArgs = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestExtractArgs_DashSourceNotASwitch asserts the real invariant: a source
+// path beginning with '-' lands after the "--" terminator (so the extractor
+// treats it as a filename, never a switch).
+func TestExtractArgs_DashSourceNotASwitch(t *testing.T) {
+	for _, tool := range []string{"unrar", "7z"} {
+		got := extractArgs(tool, "-foo.rar", "out", "")
+		var sawTerm bool
+		for i, a := range got {
+			if a == "--" {
+				sawTerm = true
+				rest := got[i+1:]
+				found := false
+				for _, r := range rest {
+					if r == "-foo.rar" {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("%s: source not found after -- terminator: %v", tool, got)
+				}
+				// Nothing before "--" should be the source path.
+				for _, b := range got[:i] {
+					if b == "-foo.rar" {
+						t.Errorf("%s: source appears before -- (would parse as switch): %v", tool, got)
+					}
+				}
+			}
+		}
+		if !sawTerm {
+			t.Errorf("%s: no -- terminator in %v", tool, got)
+		}
 	}
 }
 

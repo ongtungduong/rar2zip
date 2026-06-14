@@ -3,7 +3,6 @@ package convert
 import (
 	"archive/zip"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -49,14 +48,20 @@ func convertViaFallback(srcRar, dstZip string, opts Options, nativeErr error) er
 
 // extractArgs builds the argument list to extract srcRar into destDir for the
 // given tool, running non-interactively (never prompting for a password).
+//
+// A "--" end-of-options marker precedes the source path so a name beginning
+// with '-' is treated as a file, not a switch. All switches (including 7z's
+// -o<dir>) must come before "--". safeArgPath additionally defuses a leading
+// '@', which both tools would otherwise read as a list-file directive.
 func extractArgs(tool, srcRar, destDir, password string) []string {
+	src := safeArgPath(srcRar)
 	switch tool {
 	case "7z":
 		args := []string{"x", "-y"}
 		if password != "" {
 			args = append(args, "-p"+password)
 		}
-		return append(args, srcRar, "-o"+destDir)
+		return append(args, "-o"+destDir, "--", src)
 	default: // unrar
 		args := []string{"x", "-o+"}
 		if password != "" {
@@ -64,8 +69,20 @@ func extractArgs(tool, srcRar, destDir, password string) []string {
 		} else {
 			args = append(args, "-p-") // never query for a password
 		}
-		return append(args, srcRar, destDir+string(os.PathSeparator))
+		// destDir is rar2zip's own temp (not attacker-controlled); it follows
+		// the source as a positional argument after the "--" marker.
+		return append(args, "--", src, destDir+string(os.PathSeparator))
 	}
+}
+
+// safeArgPath rewrites a relative source path that begins with '@' to "./@…"
+// so an extractor does not interpret it as a "@listfile" directive. The '-'
+// case is handled by the caller's "--" end-of-options marker.
+func safeArgPath(p string) string {
+	if strings.HasPrefix(p, "@") {
+		return "./" + p
+	}
+	return p
 }
 
 // runExtract executes the extractor, surfacing its combined output on failure.
@@ -101,9 +118,9 @@ func zipDir(srcDir, dstZip string, opts Options) error {
 // other non-regular entries (devices, pipes, sockets) are skipped. It returns
 // the expected name->size map for --verify.
 func writeZipFromDir(out *os.File, srcDir string, opts Options) (map[string]int64, error) {
-	expected := map[string]int64{}
 	zw := zip.NewWriter(out)
 	registerCompressor(zw, opts)
+	em := newZipEmitter(zw, opts.limits(), opts.OnEntry)
 
 	walkErr := filepath.WalkDir(srcDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -123,21 +140,14 @@ func writeZipFromDir(out *os.File, srcDir string, opts Options) (map[string]int6
 		}
 
 		if d.IsDir() {
-			fh := &zip.FileHeader{Name: rel + "/"}
+			fh := &zip.FileHeader{}
 			fh.SetMode(safeMode(info.Mode(), true))
 			fh.Modified = info.ModTime()
-			if _, err := zw.CreateHeader(fh); err != nil {
-				return fmt.Errorf("write zip dir %q: %w", rel, err)
-			}
-			expected[fh.Name] = 0
-			if opts.OnEntry != nil {
-				opts.OnEntry(fh.Name)
-			}
-			return nil
+			return em.emitDir(rel, rel, fh)
 		}
 
 		mode := info.Mode()
-		fh := &zip.FileHeader{Name: rel, Method: entryMethod(opts)}
+		fh := &zip.FileHeader{Method: entryMethod(opts)}
 		fh.SetMode(safeMode(mode, false))
 		fh.Modified = info.ModTime()
 
@@ -148,18 +158,7 @@ func writeZipFromDir(out *os.File, srcDir string, opts Options) (map[string]int6
 			if err != nil {
 				return fmt.Errorf("read symlink %q: %w", rel, err)
 			}
-			w, err := zw.CreateHeader(fh)
-			if err != nil {
-				return fmt.Errorf("write zip entry %q: %w", rel, err)
-			}
-			if _, err := io.WriteString(w, target); err != nil {
-				return fmt.Errorf("write symlink target %q: %w", rel, err)
-			}
-			expected[rel] = int64(len(target))
-			if opts.OnEntry != nil {
-				opts.OnEntry(rel)
-			}
-			return nil
+			return em.emitFile(rel, rel, fh, strings.NewReader(target))
 		}
 		if !mode.IsRegular() {
 			return nil // devices/pipes/sockets carry no portable content
@@ -169,21 +168,8 @@ func writeZipFromDir(out *os.File, srcDir string, opts Options) (map[string]int6
 		if err != nil {
 			return fmt.Errorf("open extracted file %q: %w", rel, err)
 		}
-		w, err := zw.CreateHeader(fh)
-		if err != nil {
-			f.Close()
-			return fmt.Errorf("write zip entry %q: %w", rel, err)
-		}
-		n, err := io.Copy(w, f)
-		f.Close()
-		if err != nil {
-			return fmt.Errorf("copy entry %q: %w", rel, err)
-		}
-		expected[rel] = n
-		if opts.OnEntry != nil {
-			opts.OnEntry(rel)
-		}
-		return nil
+		defer f.Close()
+		return em.emitFile(rel, rel, fh, f)
 	})
 	if walkErr != nil {
 		return nil, walkErr
@@ -195,5 +181,5 @@ func writeZipFromDir(out *os.File, srcDir string, opts Options) (map[string]int6
 	if err := out.Close(); err != nil {
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
-	return expected, nil
+	return em.expected, nil
 }
