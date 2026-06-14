@@ -1,12 +1,34 @@
 # rar2zip
 
+[![CI](https://github.com/ongtungduong/rar2zip/actions/workflows/ci.yml/badge.svg)](https://github.com/ongtungduong/rar2zip/actions/workflows/ci.yml)
+
 A small CLI for **macOS** and **Linux** that converts a `.rar` archive into a `.zip`.
 
 Built in Go with a **pure-Go RAR decoder** ([`nwaples/rardecode`](https://github.com/nwaples/rardecode))
 and the standard library's `archive/zip`. The result is a single self-contained binary —
 no `unrar` / `7z` required on the user's machine.
 
-## Install (from source)
+## Install
+
+### Homebrew (macOS / Linux)
+
+```sh
+brew install ongtungduong/tap/rar2zip
+```
+
+### One-line install script
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/rar2zip/main/scripts/install.sh | sh
+```
+
+Installs to `~/.local/bin` (if on `$PATH`) or `/usr/local/bin`. Override with `INSTALL_DIR`:
+
+```sh
+INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/ongtungduong/rar2zip/main/scripts/install.sh | sh
+```
+
+### From source
 
 ```sh
 go build -o bin/rar2zip .
@@ -70,7 +92,6 @@ neutralized (stored as plain content) so they cannot escape the extraction root.
 Converts one or more archives, preserving the file/directory tree, with multi-volume
 and password support. Not yet supported (see `plans/` for the roadmap):
 
-- Prebuilt binaries / Homebrew / install script (Phase 4 — distribution & CI).
 - Compression-level control, stdin/stdout streaming, `unrar` fallback (Phase 5).
 
 RAR is a proprietary *creation* format; this tool only reads RAR and writes ZIP.

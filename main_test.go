@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +60,37 @@ func TestRun_VersionHelp(t *testing.T) {
 	// An unknown flag is a usage error.
 	if got := run([]string{"--bogus"}); got != 2 {
 		t.Errorf("run(--bogus) = %d, want 2", got)
+	}
+}
+
+// TestRun_VersionOutput verifies --version prints "rar2zip v<version> (<commit>)".
+func TestRun_VersionOutput(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	defer func() {
+		w.Close()
+		os.Stdout = old
+	}()
+
+	code := run([]string{"--version"})
+
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if code != 0 {
+		t.Fatalf("--version exited %d, want 0", code)
+	}
+	s := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(s, "rar2zip ") {
+		t.Errorf("version output %q does not start with 'rar2zip '", s)
+	}
+	if !strings.Contains(s, "(") || !strings.Contains(s, ")") {
+		t.Errorf("version output %q missing commit parens, want 'rar2zip v<ver> (<commit>)'", s)
 	}
 }
 

@@ -17,8 +17,11 @@ import (
 	"github.com/ongtungduong/rar2zip/internal/convert"
 )
 
-// version is overridden at build time via -ldflags (see distribution phase).
-var version = "dev"
+// version and commit are overridden at build time via -ldflags.
+var (
+	version = "dev"
+	commit  = "none"
+)
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -64,7 +67,7 @@ func run(args []string) int {
 	}
 
 	if showVersion {
-		fmt.Printf("rar2zip %s\n", version)
+		fmt.Printf("rar2zip v%s (%s)\n", version, commit)
 		return 0
 	}
 

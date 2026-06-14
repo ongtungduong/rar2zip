@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    name: test / ${{ matrix.os }} / ${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+            goarch: amd64
+          - os: linux
+            runner: ubuntu-24.04-arm
+            goarch: arm64
+          - os: darwin
+            runner: macos-latest
+            goarch: amd64
+          - os: darwin
+            runner: macos-latest
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: vet
+        run: go vet ./...
+
+      - name: fmt check
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "unformatted files: $unformatted"
+            exit 1
+          fi
+
+      - name: test
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: go test ./...
+
+      - name: build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o /dev/null .
