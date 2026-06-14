@@ -52,7 +52,7 @@ Phases 2–5 are deliberately lighter-detail; re-plan a phase with `/ck:plan` wh
 | 2 | [UX & Robustness](./phase-02-ux-robustness.md) | ✅ Completed | flags, overwrite/progress, mode+mtime preserved, errors |
 | 3 | [Batch & Advanced Archives](./phase-03-batch-advanced-archives.md) | ✅ Completed | multiple inputs, globs, multi-volume, password |
 | 4 | [Distribution & CI](./phase-04-distribution-ci.md) | ✅ Completed | CI, releases, Homebrew, install script |
-| 5 | [Advanced Features](./phase-05-advanced-features.md) | Pending | compression level, large-file streaming tuning, optional shell-out fallback |
+| 5 | [Advanced Features](./phase-05-advanced-features.md) | 🚧 In progress | ✅ compression (`--store`/`--level`), self-verify, JSON output, shell-out fallback · backlog: stdin/stdout, ZIP64 tuning |
 
 ## Dependencies
 

@@ -11,8 +11,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/ongtungduong/rar2zip/internal/convert"
 )
@@ -31,13 +29,18 @@ func main() {
 // 0 success, 1 runtime error, 2 usage error.
 func run(args []string) int {
 	var (
-		output      string
-		outDir      string
-		force       bool
-		quiet       bool
-		password    string
-		jobs        int
-		showVersion bool
+		output        string
+		outDir        string
+		force         bool
+		quiet         bool
+		password      string
+		jobs          int
+		store         bool
+		level         int
+		verify        bool
+		jsonOut       bool
+		allowFallback bool
+		showVersion   bool
 	)
 
 	fs := flag.NewFlagSet("rar2zip", flag.ContinueOnError)
@@ -51,6 +54,11 @@ func run(args []string) int {
 	fs.BoolVar(&quiet, "quiet", false, "suppress progress output")
 	fs.StringVar(&password, "password", "", "password for encrypted archives")
 	fs.IntVar(&jobs, "jobs", 1, "number of archives to convert concurrently")
+	fs.BoolVar(&store, "store", false, "store entries without compression")
+	fs.IntVar(&level, "level", 0, "Deflate compression level 1..9 (default: stdlib default)")
+	fs.BoolVar(&verify, "verify", false, "reopen each output ZIP and validate it after writing")
+	fs.BoolVar(&jsonOut, "json", false, "emit a machine-readable JSON summary on stdout")
+	fs.BoolVar(&allowFallback, "allow-fallback", false, "use system unrar/7z when the pure-Go decoder fails")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: rar2zip [flags] <input.rar> [more.rar ...]\n\n"+
@@ -72,7 +80,7 @@ func run(args []string) int {
 	}
 
 	inputs := fs.Args()
-	if code := validateArgs(inputs, output, outDir, jobs); code != 0 {
+	if code := validateArgs(inputs, output, outDir, jobs, store, level); code != 0 {
 		return code
 	}
 
@@ -88,11 +96,20 @@ func run(args []string) int {
 		jobList[i] = convert.Job{Src: src, Dst: resolveDst(src, output, outDir)}
 	}
 
-	opts := convert.Options{Password: password, Force: force}
+	opts := convert.Options{
+		Password:      password,
+		Force:         force,
+		Store:         store,
+		Level:         level,
+		Verify:        verify,
+		AllowFallback: allowFallback,
+	}
+	// --json owns stdout for machine output, so silence the human decoration.
+	human := !quiet && !jsonOut
 	// Per-entry progress only makes sense for a single archive; concurrent
 	// batches would interleave. Batches get a per-archive line instead.
 	var onStart func(convert.Job)
-	if !quiet {
+	if human {
 		if len(jobList) == 1 {
 			n := 0
 			opts.OnEntry = func(name string) {
@@ -107,56 +124,10 @@ func run(args []string) int {
 	}
 
 	results := convert.RunBatch(jobList, opts, jobs, onStart)
+	if jsonOut {
+		return reportJSON(results, os.Stdout)
+	}
 	return report(results, quiet)
-}
-
-// validateArgs returns a usage exit code (2) for malformed invocations, or 0.
-func validateArgs(inputs []string, output, outDir string, jobs int) int {
-	usage := func(format string, a ...any) int {
-		fmt.Fprintf(os.Stderr, "rar2zip: "+format+"\n", a...)
-		return 2
-	}
-	if len(inputs) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: rar2zip [flags] <input.rar> [more.rar ...]")
-		return 2
-	}
-	if output != "" && outDir != "" {
-		return usage("-o/--output and --out-dir are mutually exclusive")
-	}
-	if output != "" && len(inputs) > 1 {
-		return usage("-o/--output targets a single file; use --out-dir for multiple inputs")
-	}
-	if jobs < 1 {
-		return usage("--jobs must be >= 1")
-	}
-	for _, src := range inputs {
-		if !strings.EqualFold(filepath.Ext(src), ".rar") {
-			return usage("input must be a .rar file: %s", src)
-		}
-		if fi, err := os.Stat(src); err == nil && fi.IsDir() {
-			return usage("input is a directory, not a .rar file: %s", src)
-		}
-	}
-	return 0
-}
-
-// resolveDst computes the destination ZIP path for one input. --out-dir places
-// <base>.zip in that directory; -o names a file (or, if it is an existing
-// directory, places <base>.zip inside it); otherwise the output is the sibling
-// <input>.zip.
-func resolveDst(src, output, outDir string) string {
-	base := strings.TrimSuffix(filepath.Base(src), filepath.Ext(src)) + ".zip"
-	switch {
-	case outDir != "":
-		return filepath.Join(outDir, base)
-	case output != "":
-		if fi, err := os.Stat(output); err == nil && fi.IsDir() {
-			return filepath.Join(output, base)
-		}
-		return output
-	default:
-		return filepath.Join(filepath.Dir(src), base)
-	}
 }
 
 // report prints per-job outcomes and a batch summary, returning the aggregate
