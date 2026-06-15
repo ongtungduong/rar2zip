@@ -7,7 +7,23 @@ import (
 	"io"
 	"path"
 	"strings"
+	"sync"
 )
+
+// copyBufSize is the per-entry streaming copy buffer size. 512 KB cuts the
+// syscall/iteration count on large entries well below io.Copy's default 32 KB
+// without holding meaningful memory (the buffers are pooled and shared).
+const copyBufSize = 512 << 10
+
+// copyBufPool reuses streaming buffers across entries and concurrent jobs so a
+// large-entry copy neither allocates per entry nor scales memory with archive
+// size. Storing *[]byte (not []byte) keeps Put allocation-free.
+var copyBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, copyBufSize)
+		return &b
+	},
+}
 
 // errLimitBytes and errLimitEntries report that a conversion exceeded the
 // configured decompression-bomb caps. They are distinct sentinels (never
@@ -127,7 +143,9 @@ func (e *zipEmitter) emitFile(raw, name string, fh *zip.FileHeader, content io.R
 	if err != nil {
 		return fmt.Errorf("write zip entry %q: %w", raw, err)
 	}
-	n, err := io.Copy(&cappedWriter{w: w, total: &e.bytes, limit: e.lim.maxBytes}, content)
+	bufp := copyBufPool.Get().(*[]byte)
+	n, err := io.CopyBuffer(&cappedWriter{w: w, total: &e.bytes, limit: e.lim.maxBytes}, content, *bufp)
+	copyBufPool.Put(bufp)
 	if err != nil {
 		return fmt.Errorf("copy entry %q: %w", raw, err)
 	}

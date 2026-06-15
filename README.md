@@ -65,7 +65,9 @@ unzip -l archive.zip                      # inspect result
 ```
 
 Batch runs are **continue-on-error**: a failed archive is reported but doesn't abort
-the rest; the process exits non-zero if any conversion failed. Multi-volume sets
+the rest; the process exits non-zero if any conversion failed. By default a batch runs
+**concurrently** (`--jobs` defaults to `min(NumCPU, 4)`); per-archive result lines are
+still printed in input order, so output stays deterministic. Multi-volume sets
 (`.part1.rar` / `.r00`) are followed automatically.
 
 ### Flags
@@ -77,7 +79,7 @@ the rest; the process exits non-zero if any conversion failed. Multi-volume sets
 | `-f`, `--force` | Overwrite outputs that already exist (otherwise rar2zip refuses). |
 | `-q`, `--quiet` | Suppress progress output (printed to stderr). |
 | `--password <pw>` | Password for encrypted archives. |
-| `--jobs <n>` | Convert up to `n` archives concurrently (default 1). |
+| `--jobs <n>` | Convert up to `n` archives concurrently. Default: `min(NumCPU, 4)`. Per-job results are still printed in input order. |
 | `--store` | Store entries without compression. Mutually exclusive with `--level`. |
 | `--level <1..9>` | Deflate compression level (1 = fastest, 9 = best). Default: stdlib default. For no compression use `--store`. |
 | `--verify` | Reopen each output ZIP after writing and confirm its entry count and sizes match the source. A ZIP that fails its own check is removed. |

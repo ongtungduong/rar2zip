@@ -34,11 +34,18 @@ func convertViaFallback(srcRar, dstZip string, opts Options, nativeErr error) er
 		return fmt.Errorf("pure-Go decode failed and no fallback tool (unrar/7z) found: %w", nativeErr)
 	}
 
+	// Extraction stays in the system temp dir (TMPDIR): relocating the multi-GB
+	// extracted tree onto the output volume could fill the user's home disk and
+	// needs ~2x headroom (extracted tree + the zip). Users redirect via TMPDIR.
 	workDir, err := os.MkdirTemp("", "rar2zip-fallback-*")
 	if err != nil {
 		return fmt.Errorf("fallback temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
+
+	if err := ensureFallbackSpace(srcRar, workDir); err != nil {
+		return err
+	}
 
 	if err := runExtract(toolPath, extractArgs(tool, srcRar, workDir, opts.Password)); err != nil {
 		return fmt.Errorf("fallback %s extract failed: %w (pure-Go decode error: %v)", tool, err, nativeErr)
@@ -73,6 +80,37 @@ func extractArgs(tool, srcRar, destDir, password string) []string {
 		// the source as a positional argument after the "--" marker.
 		return append(args, "--", src, destDir+string(os.PathSeparator))
 	}
+}
+
+// ensureFallbackSpace fails early when the temp filesystem clearly cannot hold
+// the extraction. Because the native decoder already failed, rar2zip cannot read
+// the archive's headers to size the extracted tree, so this is a conservative
+// FLOOR — free space below the archive's own (compressed) size guarantees
+// failure since the extracted tree is at least that large — not a full
+// reservation. The extractor's own out-of-space error remains the hard bound;
+// on platforms without statfs the check is skipped.
+func ensureFallbackSpace(srcRar, workDir string) error {
+	avail, err := availableBytes(workDir)
+	if err != nil || avail < 0 {
+		return nil // unknown free space: defer to the extractor's ENOSPC
+	}
+	fi, err := os.Stat(srcRar)
+	if err != nil {
+		return nil // can't size the source; let the extractor surface the problem
+	}
+	if insufficientSpace(avail, fi.Size()) {
+		return fmt.Errorf("insufficient free space to extract %q: %d bytes free in temp dir %s, "+
+			"but the archive alone is %d bytes (the fallback extracts before re-zipping; "+
+			"free space or point TMPDIR at a larger volume)", srcRar, avail, os.TempDir(), fi.Size())
+	}
+	return nil
+}
+
+// insufficientSpace reports whether avail free bytes is below the archive's own
+// size — a hard floor for extraction. A negative avail means "unknown" (the
+// platform has no statfs) and never blocks.
+func insufficientSpace(avail, rarSize int64) bool {
+	return avail >= 0 && avail < rarSize
 }
 
 // safeArgPath rewrites a relative source path that begins with '@' to "./@…"

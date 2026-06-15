@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -173,6 +174,25 @@ func TestRun_BatchUsageErrors(t *testing.T) {
 				t.Errorf("run(%v) = %d, want 2", tc.args, got)
 			}
 		})
+	}
+}
+
+// TestDefaultJobs verifies the batch concurrency default is multi-core but
+// capped (I/O-bound work doesn't benefit from unbounded fan-out) and never < 1.
+func TestDefaultJobs(t *testing.T) {
+	got := defaultJobs()
+	if got < 1 {
+		t.Fatalf("defaultJobs() = %d, must be >= 1", got)
+	}
+	if got > 4 {
+		t.Errorf("defaultJobs() = %d, must be capped at 4", got)
+	}
+	want := runtime.NumCPU()
+	if want > 4 {
+		want = 4
+	}
+	if got != want {
+		t.Errorf("defaultJobs() = %d, want min(NumCPU,4) = %d", got, want)
 	}
 }
 
