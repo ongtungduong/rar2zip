@@ -75,6 +75,73 @@ func TestVerify_MissingEntry(t *testing.T) {
 	}
 }
 
+// TestVerify_ContentCorruption proves verify reads each entry to force a CRC
+// check: a flipped content byte leaves the declared size unchanged, so a
+// size-only check would pass — verify must catch it via the checksum.
+func TestVerify_ContentCorruption(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corrupt.zip")
+	canary := "verify-crc-canary-AAAA"
+	// Store (no compression) so the content bytes appear verbatim in the file
+	// and can be located + flipped deterministically.
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "a.txt", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte(canary)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	expected := map[string]int64{"a.txt": int64(len(canary))}
+
+	// Sanity: the faithful ZIP verifies.
+	if err := verify(path, expected); err != nil {
+		t.Fatalf("verify of faithful ZIP failed: %v", err)
+	}
+
+	// Flip a byte inside the stored content; size is unchanged.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := bytesIndex(raw, []byte(canary))
+	if idx < 0 {
+		t.Fatal("canary content not found in ZIP bytes")
+	}
+	raw[idx] ^= 0xFF
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := verify(path, expected); err == nil {
+		t.Error("verify accepted content corruption (CRC mismatch), want error")
+	}
+}
+
+// bytesIndex is a tiny substring search to avoid importing bytes for one call.
+func bytesIndex(haystack, needle []byte) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		match := true
+		for j := range needle {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestVerify_CountMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "extra.zip")
 	expected := writeTestZip(t, path,

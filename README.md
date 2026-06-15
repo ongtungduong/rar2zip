@@ -80,6 +80,8 @@ rar2zip --json *.rar                     # machine-readable summary on stdout
 rar2zip --allow-fallback exotic.rar      # use system unrar/7z if pure-Go fails
 rar2zip --list archive.rar               # preview contents, write nothing
 rar2zip --list --json archive.rar        # structured listing on stdout
+rar2zip --skip-existing *.rar            # batch: skip inputs already converted
+rar2zip --verbose archive.rar            # show decode path + timing on stderr
 unzip -l archive.zip                      # inspect result
 ```
 
@@ -96,12 +98,14 @@ still printed in input order, so output stays deterministic. Multi-volume sets
 | `-o`, `--output <path>` | Output file, or directory to place `<input>.zip` into. Single input only. Default: sibling `<input>.zip`. |
 | `--out-dir <dir>` | Write all outputs into this directory (created if needed). Use for multiple inputs. |
 | `-f`, `--force` | Overwrite outputs that already exist (otherwise rar2zip refuses). |
+| `--skip-existing` | In a batch, skip inputs whose output already exists (reported as skipped, not failed) instead of erroring. Advisory pre-check — not the collision-safety mechanism. |
 | `-q`, `--quiet` | Suppress progress output (printed to stderr). |
+| `--verbose` | Print extra diagnostics to stderr: which decode path (native vs fallback) ran and per-archive timing. Suppressed under `--json`/`--quiet`. |
 | `--password <pw>` | Password for encrypted archives. |
 | `--jobs <n>` | Convert up to `n` archives concurrently. Default: `min(NumCPU, 4)`. Per-job results are still printed in input order. |
 | `--store` | Store entries without compression. Mutually exclusive with `--level`. |
 | `--level <1..9>` | Deflate compression level (1 = fastest, 9 = best). Default: stdlib default. For no compression use `--store`. |
-| `--verify` | Reopen each output ZIP after writing and confirm its entry count and sizes match the source. A ZIP that fails its own check is removed. |
+| `--verify` | Reopen each output ZIP after writing and confirm its entry count and sizes match the source **and that every entry's content decompresses with a matching CRC** (catches same-size corruption, not just structural drift). A ZIP that fails its own check is removed. |
 | `--json` | Emit a machine-readable JSON summary on stdout (suppresses the human progress output). |
 | `--allow-fallback` | When the pure-Go decoder cannot read an archive, fall back to a system `unrar`/`7z` if installed. Waives the no-dependency guarantee. **Unsafe against untrusted archives** (see Security). |
 | `--max-size <n>` | Cap the total uncompressed size an archive may expand to (decompression-bomb defense). Accepts a plain byte count or a `K`/`M`/`G` suffix. `0` (default) = unlimited. Tripping the cap leaves no output and exits non-zero. |
@@ -116,6 +120,22 @@ conversion never clobbers an existing output. Progress is written to stderr so s
 stays clean for piping.
 
 Exit codes: `0` success · `1` runtime error · `2` usage error.
+
+### Shell completion
+
+Completion scripts for bash, zsh, and fish ship in [`completions/`](completions/)
+(and inside each release archive):
+
+```sh
+# bash — source it, or drop it in your bash-completion.d
+source completions/rar2zip.bash
+
+# zsh — place on your $fpath as _rar2zip, then `autoload -U compinit && compinit`
+cp completions/rar2zip.zsh ~/.zsh/completions/_rar2zip
+
+# fish
+cp completions/rar2zip.fish ~/.config/fish/completions/rar2zip.fish
+```
 
 ### Security
 

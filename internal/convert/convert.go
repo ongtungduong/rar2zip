@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nwaples/rardecode/v2"
 )
@@ -19,6 +20,10 @@ type Options struct {
 	// OnEntry, if non-nil, is called once per archive entry (files and
 	// directories) with the sanitized entry name, for progress reporting.
 	OnEntry func(name string)
+	// OnVerbose, if non-nil, receives extra diagnostics (which decode path was
+	// used, per-archive timing). It may run from multiple goroutines in a batch,
+	// so it must be safe for concurrent use.
+	OnVerbose func(msg string)
 	// Password, if set, decrypts password-protected RAR archives.
 	Password string
 	// Force allows overwriting an existing output file. When false, Convert
@@ -48,7 +53,17 @@ type Options struct {
 	// MaxEntries caps the number of archive entries on the native path; 0 (the
 	// default) means unlimited.
 	MaxEntries int
+	// SkipExisting, in a batch, makes an already-existing output a skip (ErrSkipped)
+	// rather than a failure. It is advisory (a pre-stat, TOCTOU-prone under the
+	// concurrent default), NOT the collision-safety mechanism — that remains the
+	// inter-job destination check plus the atomic temp+rename.
+	SkipExisting bool
 }
+
+// ErrSkipped reports that Convert declined to run because the output already
+// exists and SkipExisting was set (and Force was not). It is not a failure; the
+// batch layer records it as a skipped result.
+var ErrSkipped = errors.New("output exists; skipped (--skip-existing)")
 
 // limits projects the bomb caps from Options into the emitter's limits.
 func (o Options) limits() limits {
@@ -70,17 +85,37 @@ const DefaultLevel = 0
 func Convert(srcRar, dstZip string, opts Options) error {
 	if !opts.Force {
 		if _, err := os.Stat(dstZip); err == nil {
+			if opts.SkipExisting {
+				return ErrSkipped
+			}
 			return fmt.Errorf("output exists (use -f to overwrite): %s", dstZip)
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return fmt.Errorf("stat output %q: %w", dstZip, err)
 		}
 	}
 
+	start := time.Now()
+	base := filepath.Base(srcRar)
 	err := convertNative(srcRar, dstZip, opts)
 	if err != nil && opts.AllowFallback {
-		return convertViaFallback(srcRar, dstZip, opts, err)
+		opts.vlog("%s: native decode failed (%v); trying system unrar/7z fallback", base, err)
+		err = convertViaFallback(srcRar, dstZip, opts, err)
+		if err == nil {
+			opts.vlog("%s: converted via fallback in %s", base, time.Since(start).Round(time.Millisecond))
+		}
+		return err
+	}
+	if err == nil {
+		opts.vlog("%s: converted via native decoder in %s", base, time.Since(start).Round(time.Millisecond))
 	}
 	return err
+}
+
+// vlog emits a verbose diagnostic when OnVerbose is set.
+func (o Options) vlog(format string, a ...any) {
+	if o.OnVerbose != nil {
+		o.OnVerbose(fmt.Sprintf(format, a...))
+	}
 }
 
 // convertNative performs the pure-Go RAR→ZIP conversion (no external tools).

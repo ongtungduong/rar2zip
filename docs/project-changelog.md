@@ -6,6 +6,14 @@ defaults are called out explicitly.
 ## Unreleased
 
 ### Added
+- `--skip-existing` — in a batch, skip inputs whose output already exists
+  (reported as skipped, not failed) instead of erroring. The `--json` summary
+  gains a `skipped` count. Advisory pre-check, not a collision-safety mechanism.
+- `--verbose` — print extra diagnostics to stderr (which decode path ran:
+  native vs fallback, and per-archive timing). Suppressed under `--json`/`--quiet`.
+- Shell completion scripts for bash, zsh, and fish under `completions/` (also
+  bundled in each release archive).
+- Contributor docs: `CONTRIBUTING.md` and `docs/TROUBLESHOOTING.md`.
 - **Windows support (experimental).** Releases now publish Windows `amd64`/`arm64`
   binaries as `.zip` assets, with a Scoop bucket manifest. A Windows CI row builds
   and vets the code (the test suite is Unix-only — the `--allow-fallback` path
@@ -26,6 +34,9 @@ defaults are called out explicitly.
   fallback path; gated behind `-short`).
 
 ### Changed
+- **`--verify` now validates content CRC, not just structure.** It reads every
+  entry to force the ZIP reader's CRC32 check, so a same-size-but-corrupted entry
+  is caught — previously `--verify` checked only entry count and declared sizes.
 - **`--jobs` now defaults to `min(NumCPU, 4)` instead of `1`.** This is a
   behavior change for any invocation with two or more inputs (e.g. a `*.rar`
   glob): the batch now runs **concurrently by default**. Per-archive result

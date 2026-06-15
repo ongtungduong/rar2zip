@@ -196,6 +196,62 @@ func TestDefaultJobs(t *testing.T) {
 	}
 }
 
+// TestRun_SkipExisting covers --skip-existing: an input whose output already
+// exists is skipped (exit 0, output untouched), not failed (exit 1 without it).
+// Like the overwrite guard, the existing-output check fires before the archive
+// is opened, so a dummy .rar suffices.
+func TestRun_SkipExisting(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "in.rar")
+	if err := os.WriteFile(in, []byte("not a real rar"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "in.zip")
+	const sentinel = "preexisting"
+	if err := os.WriteFile(out, []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without --skip-existing the existing output is a failure (exit 1).
+	if got := run([]string{"-q", in}); got != 1 {
+		t.Errorf("run without --skip-existing = %d, want 1", got)
+	}
+	// With --skip-existing it is skipped: exit 0, output untouched.
+	if got := run([]string{"-q", "--skip-existing", in}); got != 0 {
+		t.Errorf("run --skip-existing = %d, want 0 (skipped, not failed)", got)
+	}
+	if b, _ := os.ReadFile(out); string(b) != sentinel {
+		t.Errorf("output modified despite --skip-existing: %q", b)
+	}
+}
+
+// TestRun_SkipExistingJSON confirms a skipped job is counted in the JSON summary.
+func TestRun_SkipExistingJSON(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "in.rar")
+	if err := os.WriteFile(in, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "in.zip"), []byte("y"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, w, _ := os.Pipe()
+	old := os.Stdout
+	os.Stdout = w
+	code := run([]string{"--json", "--skip-existing", in})
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if code != 0 {
+		t.Fatalf("run --json --skip-existing = %d, want 0", code)
+	}
+	if !strings.Contains(string(out), "\"skipped\"") {
+		t.Errorf("JSON summary missing skipped count:\n%s", out)
+	}
+}
+
 // TestRun_List covers --list paths that don't need a real archive: rejecting
 // output flags (exit 2), the non-rar extension guard (exit 2), and an unreadable
 // archive surfacing as a runtime error (exit 1).

@@ -63,6 +63,8 @@ func run(args []string) int {
 		maxSize       string
 		maxEntries    int
 		list          bool
+		skipExisting  bool
+		verbose       bool
 	)
 
 	fs := flag.NewFlagSet("rar2zip", flag.ContinueOnError)
@@ -84,6 +86,8 @@ func run(args []string) int {
 	fs.StringVar(&maxSize, "max-size", "0", "cap total uncompressed size (0 = unlimited; accepts K/M/G suffix)")
 	fs.IntVar(&maxEntries, "max-entries", 0, "cap number of entries per archive (0 = unlimited)")
 	fs.BoolVar(&list, "list", false, "preview archive contents without converting (read-only)")
+	fs.BoolVar(&skipExisting, "skip-existing", false, "skip inputs whose output already exists (instead of failing)")
+	fs.BoolVar(&verbose, "verbose", false, "print extra diagnostics (decode path, per-archive timing) to stderr")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: rar2zip [flags] <input.rar> [more.rar ...]\n\n"+
@@ -145,6 +149,13 @@ func run(args []string) int {
 		AllowFallback: allowFallback,
 		MaxTotalBytes: maxBytes,
 		MaxEntries:    maxEntries,
+		SkipExisting:  skipExisting,
+	}
+	// Verbose diagnostics go to stderr, and only when stdout isn't owned by --json.
+	if verbose && !jsonOut {
+		opts.OnVerbose = func(msg string) {
+			fmt.Fprintf(os.Stderr, "[verbose] %s\n", msg)
+		}
 	}
 	// --json owns stdout for machine output, so silence the human decoration.
 	human := !quiet && !jsonOut
@@ -170,18 +181,24 @@ func run(args []string) int {
 // report prints per-job outcomes and a batch summary, returning the aggregate
 // exit code: 1 if any job failed, else 0.
 func report(results []convert.Result, quiet bool) int {
-	failed := 0
+	failed, skipped := 0, 0
 	for _, r := range results {
-		if r.Err != nil {
+		switch {
+		case r.Err != nil:
 			failed++
 			fmt.Fprintf(os.Stderr, "rar2zip: %s: %v\n", r.Src, r.Err)
-			continue
+		case r.Skipped:
+			skipped++
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "skipped %s (output exists)\n", r.Dst)
+			}
+		default:
+			fmt.Printf("wrote %s\n", r.Dst)
 		}
-		fmt.Printf("wrote %s\n", r.Dst)
 	}
 
 	if len(results) > 1 && !quiet {
-		fmt.Fprintf(os.Stderr, "%d succeeded, %d failed\n", len(results)-failed, failed)
+		fmt.Fprintf(os.Stderr, "%d succeeded, %d skipped, %d failed\n", len(results)-failed-skipped, skipped, failed)
 	} else if len(results) == 1 && !quiet {
 		// Terminate the single-archive progress line.
 		fmt.Fprintln(os.Stderr)

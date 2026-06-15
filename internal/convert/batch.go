@@ -1,6 +1,9 @@
 package convert
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
 // Job is a single source-RAR → destination-ZIP conversion.
 type Job struct {
@@ -8,10 +11,13 @@ type Job struct {
 	Dst string
 }
 
-// Result reports the outcome of one Job. Err is nil on success.
+// Result reports the outcome of one Job. Err is nil on success. Skipped is true
+// when the job was intentionally not run (output already existed under
+// --skip-existing); a skipped result has a nil Err and is not a failure.
 type Result struct {
 	Job
-	Err error
+	Err     error
+	Skipped bool
 }
 
 // RunBatch converts every job, continuing past failures so one bad archive
@@ -39,7 +45,12 @@ func RunBatch(jobs []Job, opts Options, maxParallel int, onStart func(Job)) []Re
 				onStart(j)
 			}
 			// Distinct index per goroutine — no shared-slot write race.
-			results[i] = Result{Job: j, Err: Convert(j.Src, j.Dst, opts)}
+			err := Convert(j.Src, j.Dst, opts)
+			if errors.Is(err, ErrSkipped) {
+				results[i] = Result{Job: j, Skipped: true}
+			} else {
+				results[i] = Result{Job: j, Err: err}
+			}
 		}(i, j)
 	}
 

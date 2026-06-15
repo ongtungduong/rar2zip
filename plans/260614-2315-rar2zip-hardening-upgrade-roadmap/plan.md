@@ -4,7 +4,7 @@ description: >-
   Audit-driven roadmap to fix correctness/security defects and upgrade rar2zip
   from a solid MVP into a robust, production-grade RAR→ZIP tool. Sourced from a
   5-dimension audit (features, performance, logic, architecture, security).
-status: pending
+status: completed
 priority: P1
 branch: "main"
 tags: [cli, go, hardening, security, performance]
@@ -41,7 +41,7 @@ Reports under `plans/reports/` (260614-23xx): security, performance, architectur
 | 2 | [Real-World Robustness](./phase-02-real-world-robustness.md) | P2 | ✅ Completed |
 | 3 | [Performance & Benchmarks](./phase-03-performance-benchmarks.md) | P2 | ✅ Completed |
 | 4 | [Distribution & Supply-Chain Hardening](./phase-04-distribution-supply-chain-hardening.md) | P2 | ✅ Completed |
-| 5 | [UX & Docs Polish](./phase-05-ux-docs-polish.md) | P3 | Pending |
+| 5 | [UX & Docs Polish](./phase-05-ux-docs-polish.md) | P3 | ✅ Completed |
 
 ## Out of Scope (YAGNI — defer until demand)
 
