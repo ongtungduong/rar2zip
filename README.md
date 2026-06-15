@@ -59,6 +59,8 @@ rar2zip --level 9 archive.rar            # max Deflate compression
 rar2zip --verify archive.rar             # re-open output and validate it
 rar2zip --json *.rar                     # machine-readable summary on stdout
 rar2zip --allow-fallback exotic.rar      # use system unrar/7z if pure-Go fails
+rar2zip --list archive.rar               # preview contents, write nothing
+rar2zip --list --json archive.rar        # structured listing on stdout
 unzip -l archive.zip                      # inspect result
 ```
 
@@ -82,7 +84,8 @@ the rest; the process exits non-zero if any conversion failed. Multi-volume sets
 | `--json` | Emit a machine-readable JSON summary on stdout (suppresses the human progress output). |
 | `--allow-fallback` | When the pure-Go decoder cannot read an archive, fall back to a system `unrar`/`7z` if installed. Waives the no-dependency guarantee. **Unsafe against untrusted archives** (see Security). |
 | `--max-size <n>` | Cap the total uncompressed size an archive may expand to (decompression-bomb defense). Accepts a plain byte count or a `K`/`M`/`G` suffix. `0` (default) = unlimited. Tripping the cap leaves no output and exits non-zero. |
-| `--max-entries <n>` | Cap the number of entries an archive may contain. `0` (default) = unlimited. |
+| `--max-entries <n>` | Cap the number of entries an archive may contain. `0` (default) = unlimited. Also bounds `--list`. |
+| `--list` | Preview an archive's entries (size, modification time, name) without converting. Read-only — writes no ZIP. Honors `--json`, `--password`, and `--max-entries`; rejects `-o`/`--out-dir`. |
 | `--version` | Print version and exit. |
 | `-h`, `--help` | Print usage and exit. |
 
@@ -118,10 +121,26 @@ after path sanitization is rejected, and legitimate repeats are kept under a ren
 
 Converts one or more archives, preserving the file/directory tree, with multi-volume
 and password support; supports compression control (`--store`/`--level`), self-verify
-(`--verify`), JSON output (`--json`), and an optional system `unrar`/`7z` fallback
-(`--allow-fallback`). Not yet supported (see `plans/` for the roadmap):
+(`--verify`), JSON output (`--json`), read-only previews (`--list`), and an optional
+system `unrar`/`7z` fallback (`--allow-fallback`). Not yet supported (see `plans/` for
+the roadmap):
 
 - stdin/stdout streaming, large-file/ZIP64 throughput tuning.
+
+### Filename encoding (legacy / CJK charsets)
+
+There is **no filename-encoding override**. The pure-Go decoder
+(`nwaples/rardecode`) returns each entry name already decoded to a Go string and
+discards the archive's raw name bytes and stored codepage, so rar2zip cannot
+re-interpret a legacy-charset name (Shift-JIS, GBK, Big5, …) after the fact —
+the original bytes are gone before rar2zip ever sees the entry. Names that the
+archive recorded in a non-Unicode codepage may therefore appear garbled.
+
+Re-decoding the already-decoded string would be both lossy and unsafe (a
+re-interpreted byte could resurface a `/` or `..` *after* path sanitization
+ran), so it is deliberately not attempted. If you need correct legacy-charset
+names, extract with a tool that accepts a source-codepage flag (e.g.
+`unrar x -cp936 …`) and re-zip the result.
 
 RAR is a proprietary *creation* format; this tool only reads RAR and writes ZIP.
 

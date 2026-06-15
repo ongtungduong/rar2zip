@@ -43,6 +43,7 @@ func run(args []string) int {
 		showVersion   bool
 		maxSize       string
 		maxEntries    int
+		list          bool
 	)
 
 	fs := flag.NewFlagSet("rar2zip", flag.ContinueOnError)
@@ -63,6 +64,7 @@ func run(args []string) int {
 	fs.BoolVar(&allowFallback, "allow-fallback", false, "use system unrar/7z when the pure-Go decoder fails (unsafe vs untrusted archives)")
 	fs.StringVar(&maxSize, "max-size", "0", "cap total uncompressed size (0 = unlimited; accepts K/M/G suffix)")
 	fs.IntVar(&maxEntries, "max-entries", 0, "cap number of entries per archive (0 = unlimited)")
+	fs.BoolVar(&list, "list", false, "preview archive contents without converting (read-only)")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: rar2zip [flags] <input.rar> [more.rar ...]\n\n"+
@@ -96,6 +98,10 @@ func run(args []string) int {
 	if maxEntries < 0 {
 		fmt.Fprintln(os.Stderr, "rar2zip: --max-entries must be >= 0")
 		return 2
+	}
+
+	if list {
+		return runList(inputs, output, outDir, password, maxEntries, jsonOut)
 	}
 
 	jobList, err := buildJobs(inputs, output, outDir)

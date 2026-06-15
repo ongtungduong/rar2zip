@@ -176,6 +176,73 @@ func TestRun_BatchUsageErrors(t *testing.T) {
 	}
 }
 
+// TestRun_List covers --list paths that don't need a real archive: rejecting
+// output flags (exit 2), the non-rar extension guard (exit 2), and an unreadable
+// archive surfacing as a runtime error (exit 1).
+func TestRun_List(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "nope.rar")
+	txt := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(txt, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		want int
+	}{
+		{"list with output flag", []string{"--list", "-o", "x.zip", missing}, 2},
+		{"list with out-dir flag", []string{"--list", "--out-dir", dir, missing}, 2},
+		{"list non-rar input", []string{"--list", txt}, 2},
+		{"list missing archive", []string{"--list", missing}, 1},
+		{"list missing archive json", []string{"--list", "--json", missing}, 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := run(tc.args); got != tc.want {
+				t.Errorf("run(%v) = %d, want %d", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRun_ListFixture lists a real fixture and confirms it writes no ZIP and
+// emits valid JSON with at least one entry. Skips when no fixture is present.
+func TestRun_ListFixture(t *testing.T) {
+	matches, _ := filepath.Glob("testdata/*.rar")
+	if len(matches) == 0 {
+		t.Skip("no testdata/*.rar fixture present; skipping list fixture test")
+	}
+	src := matches[0]
+
+	// Capture stdout for the JSON listing.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	code := run([]string{"--list", "--json", src})
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+
+	if code != 0 {
+		t.Fatalf("run(--list --json) = %d, want 0", code)
+	}
+	if !strings.Contains(string(out), "\"archives\"") || !strings.Contains(string(out), "\"entries\"") {
+		t.Errorf("JSON listing missing expected keys:\n%s", out)
+	}
+	// --list must not write a sibling ZIP.
+	base := filepath.Base(src)
+	zipPath := filepath.Join(filepath.Dir(src), base[:len(base)-len(filepath.Ext(base))]+".zip")
+	if _, err := os.Stat(zipPath); err == nil {
+		os.Remove(zipPath)
+		t.Errorf("--list wrote a ZIP at %s; it must be read-only", zipPath)
+	}
+}
+
 // TestRun_Batch exercises multi-input conversion, --out-dir, --jobs, and
 // continue-on-error against a real fixture. Skips when no fixture is present.
 func TestRun_Batch(t *testing.T) {

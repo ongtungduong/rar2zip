@@ -1,0 +1,191 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"text/tabwriter"
+	"time"
+	"unicode"
+
+	"github.com/ongtungduong/rar2zip/internal/convert"
+)
+
+// runList previews each input archive read-only (no ZIP is written) and reports
+// the result as a human table or, with --json, a structured document. -o and
+// --out-dir are rejected because --list writes no output. The entry-count cap
+// bounds each listing. Returns the process exit code: 1 if any archive failed.
+func runList(inputs []string, output, outDir, password string, maxEntries int, jsonOut bool) int {
+	if output != "" || outDir != "" {
+		fmt.Fprintln(os.Stderr, "rar2zip: --list previews contents and writes no output; remove -o/--out-dir")
+		return 2
+	}
+
+	opts := convert.Options{Password: password, MaxEntries: maxEntries}
+	archives := make([]listedArchive, 0, len(inputs))
+	for _, src := range inputs {
+		entries, err := convert.List(src, opts)
+		archives = append(archives, listedArchive{Src: src, Entries: entries, Err: err})
+	}
+
+	if jsonOut {
+		return reportListJSON(os.Stdout, archives)
+	}
+	printList(os.Stdout, archives)
+	for _, a := range archives {
+		if a.Err != nil {
+			fmt.Fprintf(os.Stderr, "rar2zip: %s: %v\n", a.Src, a.Err)
+		}
+	}
+	if anyListErr(archives) {
+		return 1
+	}
+	return 0
+}
+
+// listedArchive is one archive's --list outcome: its entries, or the error that
+// prevented reading it. Err and Entries are reported together so a multi-archive
+// listing continues past a single unreadable input.
+type listedArchive struct {
+	Src     string
+	Entries []convert.EntryInfo
+	Err     error
+}
+
+// anyListErr reports whether any archive failed to list (drives the exit code).
+func anyListErr(archives []listedArchive) bool {
+	for _, a := range archives {
+		if a.Err != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// printList writes a human-readable preview of each archive's contents to w.
+// Directories are shown with a trailing slash and a "-" size; unknown sizes (a
+// streamed entry the archive did not size) also render as "-". A per-archive
+// header is printed only when more than one archive is listed. Archives that
+// failed to read are skipped here — the caller reports their error on stderr so
+// stdout carries only listings.
+func printList(w io.Writer, archives []listedArchive) {
+	multi := len(archives) > 1
+	printed := false
+	for _, a := range archives {
+		if a.Err != nil {
+			continue
+		}
+		if multi {
+			if printed {
+				fmt.Fprintln(w)
+			}
+			fmt.Fprintf(w, "%s:\n", a.Src)
+		}
+		printed = true
+
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "SIZE\tMODIFIED\tNAME")
+		for _, e := range a.Entries {
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", listSize(e), listTime(e.Modified), listName(e))
+		}
+		tw.Flush()
+	}
+}
+
+// listName renders an entry name for the human table: control characters are
+// replaced with '?' so a hostile archive cannot smuggle ANSI escapes, CR, or NUL
+// into the operator's terminal (printable UTF-8, including CJK, is preserved),
+// and directories get a trailing slash so a preview reads like a file tree. The
+// --json path keeps the raw name — encoding/json escapes control characters.
+func listName(e convert.EntryInfo) string {
+	name := displaySafe(e.Name)
+	if e.IsDir {
+		return name + "/"
+	}
+	return name
+}
+
+// displaySafe replaces control runes (C0, C1, DEL) with '?' for TTY-safe output.
+func displaySafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, s)
+}
+
+// listSize renders a directory or unknown-size entry as "-" and any other entry
+// as its byte count.
+func listSize(e convert.EntryInfo) string {
+	if e.IsDir || e.Size < 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d", e.Size)
+}
+
+// listTime renders a zero modtime as "-" rather than the Go zero date.
+func listTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// listEntryJSON is one entry in the --list --json document. modified is omitted
+// when the archive recorded none; size stays -1 for unknown-size entries.
+type listEntryJSON struct {
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	Modified string `json:"modified,omitempty"`
+	IsDir    bool   `json:"isDir"`
+}
+
+// listArchiveJSON is one archive's entry in the --list --json document.
+type listArchiveJSON struct {
+	Src     string          `json:"src"`
+	Count   int             `json:"count"`
+	Entries []listEntryJSON `json:"entries"`
+	Error   string          `json:"error,omitempty"`
+}
+
+// listSummaryJSON is the top-level --list --json document.
+type listSummaryJSON struct {
+	Archives []listArchiveJSON `json:"archives"`
+}
+
+// reportListJSON writes a JSON listing of every archive to w and returns the
+// aggregate exit code: 1 if any archive failed to list, else 0.
+func reportListJSON(w io.Writer, archives []listedArchive) int {
+	doc := listSummaryJSON{Archives: make([]listArchiveJSON, 0, len(archives))}
+	for _, a := range archives {
+		aj := listArchiveJSON{
+			Src:     a.Src,
+			Count:   len(a.Entries),
+			Entries: make([]listEntryJSON, 0, len(a.Entries)),
+		}
+		if a.Err != nil {
+			aj.Error = a.Err.Error()
+		}
+		for _, e := range a.Entries {
+			ej := listEntryJSON{Name: e.Name, Size: e.Size, IsDir: e.IsDir}
+			if !e.Modified.IsZero() {
+				ej.Modified = e.Modified.UTC().Format(time.RFC3339)
+			}
+			aj.Entries = append(aj.Entries, ej)
+		}
+		doc.Archives = append(doc.Archives, aj)
+	}
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(doc); err != nil {
+		return 1
+	}
+	if anyListErr(archives) {
+		return 1
+	}
+	return 0
+}
