@@ -6,6 +6,13 @@ defaults are called out explicitly.
 ## Unreleased
 
 ### Added
+- **Windows support (experimental).** Releases now publish Windows `amd64`/`arm64`
+  binaries as `.zip` assets, with a Scoop bucket manifest. A Windows CI row builds
+  and vets the code (the test suite is Unix-only — the `--allow-fallback` path
+  shells out to `unrar`/`7z` and creates symlinks). See README "Windows (Scoop)".
+- **Release signing.** `checksums.txt` is signed with keyless `cosign` (Sigstore,
+  via Actions OIDC — no stored keys). `install.sh` verifies the signature when
+  `cosign` is installed (authenticity), in addition to the mandatory checksum.
 - `--list` — preview an archive's entries (size, modification time, name) without
   converting (read-only; writes no ZIP). Honors `--json`, `--password`, and the
   `--max-entries` cap; rejects `-o`/`--out-dir`. Human output strips control

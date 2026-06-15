@@ -28,6 +28,25 @@ Installs to `~/.local/bin` (if on `$PATH`) or `/usr/local/bin`. Override with `I
 INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/ongtungduong/rar2zip/main/scripts/install.sh | sh
 ```
 
+The script verifies the download against the release `checksums.txt` (a missing
+`sha256sum`/`shasum` is a hard error — no silent unverified install). If
+[`cosign`](https://github.com/sigstore/cosign) is installed it also verifies the
+keyless signature over `checksums.txt` (authenticity). `SKIP_CHECKSUM=1` disables
+verification — never use it with a piped install.
+
+### Windows (Scoop) — experimental
+
+```powershell
+scoop bucket add rar2zip https://github.com/ongtungduong/scoop-bucket
+scoop install rar2zip
+```
+
+Windows binaries (`amd64`/`arm64`) are published as `.zip` assets on each
+release. Windows support is **experimental**: the tool reads RAR and writes ZIP
+names with `/` separators, but the optional `--allow-fallback` path shells out to
+`unrar`/`7z` and is exercised only on Unix CI. You can also download a `.zip`
+from the [Releases](https://github.com/ongtungduong/rar2zip/releases) page directly.
+
 ### From source
 
 ```sh

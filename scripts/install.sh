@@ -5,12 +5,21 @@
 #   curl -fsSL https://raw.githubusercontent.com/ongtungduong/rar2zip/main/scripts/install.sh | sh
 #   VERSION=v0.2.0 sh install.sh          # pin a version
 #   INSTALL_DIR=/usr/local/bin sh install.sh
+#
+# Verification:
+#   The download is checksum-verified against the release's checksums.txt. A
+#   missing sha256sum/shasum is FATAL (no silent unverified install). If cosign
+#   is installed, the cosign signature over checksums.txt is also verified
+#   (authenticity); without cosign that step is skipped (integrity still holds).
+#   SKIP_CHECKSUM=1 disables integrity verification entirely — NEVER use it with
+#   a piped (curl | sh) install.
 
 set -eu
 
 REPO="ongtungduong/rar2zip"
 INSTALL_DIR="${INSTALL_DIR:-}"
 VERSION="${VERSION:-}"
+SKIP_CHECKSUM="${SKIP_CHECKSUM:-}"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -71,6 +80,58 @@ latest_version() {
     | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/'
 }
 
+# ── verify download (integrity + best-effort authenticity) ────────────────────
+
+# verify_download enforces the release checksum over the downloaded tarball and,
+# when cosign is present, the keyless signature over checksums.txt. A missing
+# hash tool is fatal unless SKIP_CHECKSUM=1 (explicit, unsafe opt-out).
+verify_download() {
+  if [ "$SKIP_CHECKSUM" = "1" ]; then
+    warn "SKIP_CHECKSUM=1 — integrity verification DISABLED (never use this with a piped install)"
+    return
+  fi
+
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    fatal "no sha256sum/shasum found to verify the download; install one, or re-run with SKIP_CHECKSUM=1 to bypass (unsafe)"
+  fi
+
+  info "Verifying checksum..."
+  curl -fsSL "${RELEASE_URL}/checksums.txt" -o "${WORK_DIR}/checksums.txt"
+
+  # Extract OUR tarball's line by exact second-field (filename) match. Using awk
+  # (not `grep | sha256sum -c -`) is deliberate: a pipe takes sha256sum's exit
+  # status, and `sha256sum -c` on EMPTY stdin exits 0 — so a missing/renamed
+  # entry or a checksums.txt that is actually an HTML error page would silently
+  # "pass". An exact field match that errors on no-match closes that hole and the
+  # substring/regex fragility of grep at once.
+  if ! awk -v f="$TARBALL" '$2 == f { print; found = 1 } END { exit !found }' \
+      "${WORK_DIR}/checksums.txt" > "${WORK_DIR}/expected.sha256"; then
+    fatal "no checksum entry for ${TARBALL} in checksums.txt (asset name drift or a bad download)"
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    (cd "$WORK_DIR" && sha256sum -c expected.sha256)
+  else
+    (cd "$WORK_DIR" && shasum -a 256 -c expected.sha256)
+  fi
+
+  # Authenticity is best-effort: only when cosign is available. checksums.txt is
+  # signed keylessly in CI, so the certificate identity is the release workflow.
+  if command -v cosign >/dev/null 2>&1; then
+    info "Verifying signature (cosign)..."
+    curl -fsSL "${RELEASE_URL}/checksums.txt.sig" -o "${WORK_DIR}/checksums.txt.sig"
+    curl -fsSL "${RELEASE_URL}/checksums.txt.pem" -o "${WORK_DIR}/checksums.txt.pem"
+    cosign verify-blob \
+      --certificate "${WORK_DIR}/checksums.txt.pem" \
+      --signature "${WORK_DIR}/checksums.txt.sig" \
+      --certificate-identity-regexp "^https://github.com/${REPO}/.github/workflows/.+" \
+      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      "${WORK_DIR}/checksums.txt" \
+      || fatal "cosign signature verification failed — refusing to install"
+  else
+    info "cosign not found — skipping signature check (checksum integrity already verified)"
+  fi
+}
+
 # ── download + verify + install ───────────────────────────────────────────────
 
 main() {
@@ -83,6 +144,9 @@ main() {
   if [ -z "$VERSION" ]; then
     info "Fetching latest release..."
     VERSION="$(latest_version)"
+    # latest_version pipes curl into grep|sed; a failed API call yields an empty
+    # string (the pipe's exit status is sed's), so guard it explicitly.
+    [ -n "$VERSION" ] || fatal "could not resolve the latest release version (GitHub API unreachable or rate-limited); set VERSION=vX.Y.Z"
   fi
 
   info "Installing rar2zip ${VERSION} (${OS}/${ARCH})"
@@ -97,20 +161,7 @@ main() {
   info "Downloading ${TARBALL}..."
   curl -fsSL "${RELEASE_URL}/${TARBALL}" -o "${WORK_DIR}/${TARBALL}"
 
-  # Verify checksum if sha256sum / shasum is available.
-  if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
-    info "Verifying checksum..."
-    curl -fsSL "${RELEASE_URL}/checksums.txt" -o "${WORK_DIR}/checksums.txt"
-    cd "$WORK_DIR"
-    if command -v sha256sum >/dev/null 2>&1; then
-      grep "${TARBALL}" checksums.txt | sha256sum -c -
-    else
-      grep "${TARBALL}" checksums.txt | shasum -a 256 -c -
-    fi
-    cd - >/dev/null
-  else
-    warn "sha256sum/shasum not found — skipping checksum verification"
-  fi
+  verify_download
 
   info "Extracting..."
   tar -xzf "${WORK_DIR}/${TARBALL}" -C "$WORK_DIR"

@@ -40,7 +40,7 @@ Reports under `plans/reports/` (260614-23xx): security, performance, architectur
 | 1 | [Correctness & Safety Hardening](./phase-01-correctness-safety-hardening.md) | P1 | ✅ Completed |
 | 2 | [Real-World Robustness](./phase-02-real-world-robustness.md) | P2 | ✅ Completed |
 | 3 | [Performance & Benchmarks](./phase-03-performance-benchmarks.md) | P2 | ✅ Completed |
-| 4 | [Distribution & Supply-Chain Hardening](./phase-04-distribution-supply-chain-hardening.md) | P2 | Pending |
+| 4 | [Distribution & Supply-Chain Hardening](./phase-04-distribution-supply-chain-hardening.md) | P2 | ✅ Completed |
 | 5 | [UX & Docs Polish](./phase-05-ux-docs-polish.md) | P3 | Pending |
 
 ## Out of Scope (YAGNI — defer until demand)

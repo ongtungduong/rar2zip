@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ["main"]
 
+# Least privilege: CI only needs to read the repo.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: test / ${{ matrix.os }} / ${{ matrix.goarch }}
@@ -26,11 +30,18 @@ jobs:
           - os: darwin
             runner: macos-latest
             goarch: arm64
+          # Windows is experimental and build-only: the fallback tests shell out
+          # to unrar/7z and create symlinks, which are Unix-only. vet/fmt/build
+          # still run (they compile the windows build variant), so a broken
+          # Windows build is caught — but the test suite is not run here.
+          - os: windows
+            runner: windows-latest
+            goarch: amd64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
           cache: true
@@ -39,6 +50,7 @@ jobs:
         run: go vet ./...
 
       - name: fmt check
+        if: matrix.os != 'windows'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -47,12 +59,16 @@ jobs:
           fi
 
       - name: test
+        if: matrix.os != 'windows'
         env:
           GOARCH: ${{ matrix.goarch }}
         run: go test ./...
 
       - name: build
+        # `go build ./...` compiles every package for the target GOOS/GOARCH and
+        # discards the output — a cross-platform compile check (no /dev/null,
+        # which Windows lacks).
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -o /dev/null .
+        run: go build ./...

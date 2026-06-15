@@ -11,6 +11,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
@@ -23,9 +24,13 @@ builds:
 
 archives:
   - id: rar2zip
-    builds: [rar2zip]
+    ids: [rar2zip]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
+    formats: [tar.gz]
+    # Windows users expect a .zip (and Scoop requires it).
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     files:
       - README.md
       - LICENSE*
@@ -33,6 +38,23 @@ archives:
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
+
+# Keyless cosign signature over checksums.txt: authenticity on top of the
+# checksum's integrity. Uses the GitHub Actions OIDC token (id-token: write) —
+# no private keys to store or rotate. Verifiers check ${artifact}.sig against
+# ${artifact}.pem (the Fulcio-issued certificate).
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
 
 changelog:
   sort: asc
@@ -44,6 +66,11 @@ changelog:
       - Merge pull request
       - Merge branch
 
+# NOTE: goreleaser deprecates `brews` (formulae) in favor of `homebrew_casks`.
+# We intentionally keep the formula: Homebrew casks are largely macOS-only and add
+# Gatekeeper quarantine friction, so migrating would regress Linux `brew` users and
+# unsigned-binary UX on macOS. `brews` still works in the pinned v2.16.0 (deprecated,
+# not removed); revisit the cask migration when goreleaser schedules removal.
 brews:
   - name: rar2zip
     # Skip publishing to tap when token is not configured.
@@ -59,3 +86,15 @@ brews:
       bin.install "rar2zip"
     test: |
       system "#{bin}/rar2zip", "--version"
+
+scoops:
+  - name: rar2zip
+    # Skip publishing to the bucket when no token is configured (mirrors brews).
+    skip_upload: "{{ if eq .Env.SCOOP_TAP_TOKEN \"\" }}true{{ end }}"
+    repository:
+      owner: ongtungduong
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_TAP_TOKEN }}"
+    homepage: "https://github.com/ongtungduong/rar2zip"
+    description: "Convert RAR archives to ZIP — pure-Go, no unrar required"
+    license: MIT
