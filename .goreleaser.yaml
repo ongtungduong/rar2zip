@@ -50,6 +50,11 @@ signs:
     certificate: "${artifact}.pem"
     args:
       - sign-blob
+      # cosign 3.x defaults to the new Sigstore bundle format, which ignores
+      # --output-signature/--output-certificate and demands --bundle. Force the
+      # legacy detached .sig/.pem outputs that install.sh verifies (verify-blob
+      # --signature/--certificate). Revisit if install.sh adopts --bundle.
+      - "--new-bundle-format=false"
       - "--output-signature=${signature}"
       - "--output-certificate=${certificate}"
       - "${artifact}"
