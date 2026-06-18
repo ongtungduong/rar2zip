@@ -5,6 +5,8 @@ defaults are called out explicitly.
 
 ## Unreleased
 
+## 0.2.1 — 2026-06-18
+
 ### Added
 - `--skip-existing` — in a batch, skip inputs whose output already exists
   (reported as skipped, not failed) instead of erroring. The `--json` summary
