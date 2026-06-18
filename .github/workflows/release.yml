@@ -30,6 +30,15 @@ jobs:
       # Provides the `cosign` binary that goreleaser's signs block invokes to
       # keylessly sign checksums.txt (authenticity, in addition to integrity).
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Pin the cosign BINARY to the 2.x line. cosign 3.x (installed by
+          # cosign-installer v4) removed the legacy detached sign-blob flow:
+          # --output-signature/--output-certificate now require the new bundle
+          # format / signing-config, which breaks our signs block and
+          # install.sh's verify-blob --signature/--certificate. The installer
+          # action version is independent of the cosign binary it installs, so
+          # pinning the binary keeps signing stable across action bumps.
+          cosign-release: v2.6.3
 
       - uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
         with:
